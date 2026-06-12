@@ -4,8 +4,6 @@
 
 LaBoltz is a general-purpose Lattice Boltzmann Method framework for fluid and energy research. The immediate goal is a verified incompressible-flow foundation that can grow into 3D, transient, transport, multiphase, and electrochemical simulations.
 
-This repository is intentionally small at the moment. That is a strength: every benchmark we add should teach us something about the numerical engine.
-
 ## Current Status
 
 The current codebase includes:
@@ -18,7 +16,7 @@ The current codebase includes:
 - Solid-cell bounce-back walls
 - Guo body forcing
 - Moving-wall support for Couette and lid-driven cavity flow
-- ASCII VTK output for visualization
+- ASCII VTK output for visualisation
 - CSV diagnostics for convergence and validation checks
 - SI scaling metadata for benchmark runs
 - A lightweight Python/Tk research viewer
@@ -65,7 +63,7 @@ On Windows, the recommended setup is:
 - CMake 3.24 or newer
 - Python 3 for the viewer
 
-The helper scripts initialize the Visual Studio compiler environment for you, so `cmake` and `cl` do not need to be permanently available on your normal PowerShell `PATH`.
+The helper scripts initialise the Visual Studio compiler environment for you, so `cmake` and `cl` do not need to be permanently available on your normal PowerShell `PATH`.
 
 ## Build
 
@@ -77,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 
 This builds the default `Debug` configuration and runs the tests.
 
-For actual simulations, use `Release` because it is optimized and much faster:
+For actual simulations, use `Release` because it is optimised and much faster:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Configuration Release
@@ -204,7 +202,7 @@ case_final.vtk                        Final field snapshot
 case_report.html                      Optional exported viewer report
 ```
 
-The `2d`/`3d` and `d3q19`/`d3q27` parts are deliberate. They make future comparisons easier to organize.
+The `2d`/`3d` and `d3q19`/`d3q27` parts are deliberate. They make future comparisons easier to organise.
 
 ## Research Viewer
 
@@ -279,7 +277,7 @@ The first name passed to `add_executable` becomes the `.exe` name:
 build/Release/lbm_backward_facing_step.exe
 ```
 
-The `lbm_` prefix is only a naming convention. It keeps the project executables easy to recognize.
+The `lbm_` prefix is only a naming convention. It keeps the project executables easy to recognise.
 
 ## Direct CMake Commands
 
