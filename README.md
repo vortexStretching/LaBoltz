@@ -288,16 +288,3 @@ cmake -S . -B build
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
-
-On this workstation, the helper script is usually simpler because it initializes the Visual Studio compiler environment automatically.
-
-## Development Notes
-
-Before committing changes, a useful local check is:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Configuration Release
-git status
-```
-
-Generated folders such as `build/` and `outputs/` are ignored by Git. Source code, documentation, scripts, and tests are tracked.
