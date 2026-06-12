@@ -1,0 +1,17 @@
+build/
+out/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+*.tmp
+*.log
+*.vtk
+*.vti
+*.h5
+*.hdf5
+__pycache__/
+*.pyc
+
