@@ -1,5 +1,6 @@
 #include "lbm/collision.hpp"
 #include "lbm/equilibrium.hpp"
+#include "lbm/geometry.hpp"
 #include "lbm/initialization.hpp"
 #include "lbm/lattice.hpp"
 #include "lbm/macroscopic.hpp"
@@ -61,6 +62,28 @@ void test_streaming_is_periodic() {
   assert(destination(2, wrapped_target) == source(2, source_cell));
 }
 
+void test_streaming_bounce_back_reflects_from_solid_cell() {
+  using Lattice = lbm::D3Q19;
+
+  const lbm::Extent3D extent{3, 1, 1};
+  lbm::PopulationField<Lattice> source(extent);
+  lbm::PopulationField<Lattice> destination(extent);
+  lbm::GeometryField geometry(extent);
+
+  const std::size_t left = lbm::cell_index(extent, 0, 0, 0);
+  const std::size_t center = lbm::cell_index(extent, 1, 0, 0);
+  const std::size_t right = lbm::cell_index(extent, 2, 0, 0);
+
+  geometry(right) = lbm::CellType::Solid;
+  source(1, center) = 2.5;
+
+  lbm::stream_periodic_bounce_back(source, destination, geometry);
+
+  assert(destination(2, center) == 2.5);
+  assert(destination(1, right) == 0.0);
+  assert(destination(1, left) == 0.0);
+}
+
 void test_bgk_preserves_mass_for_periodic_step() {
   using Lattice = lbm::D3Q19;
 
@@ -84,8 +107,8 @@ int main() {
   test_equilibrium_recovers_macroscopic_values<lbm::D3Q19>();
   test_equilibrium_recovers_macroscopic_values<lbm::D3Q27>();
   test_streaming_is_periodic();
+  test_streaming_bounce_back_reflects_from_solid_cell();
   test_bgk_preserves_mass_for_periodic_step();
 
   return 0;
 }
-
