@@ -68,3 +68,19 @@ The first verification benchmark is planar Poiseuille flow:
 It writes VTK and CSV diagnostics under `outputs/`.
 
 The growing benchmark ladder is tracked in [docs/benchmarks.md](docs/benchmarks.md).
+
+## Research Viewer
+
+The current lightweight GUI uses only Python's standard library, so it works even before the future PySide6 interface is installed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_gui.ps1
+```
+
+It loads `outputs/poiseuille_history.csv`, `outputs/poiseuille_profile.csv`, and `outputs/poiseuille_final.vtk`, then shows convergence plots, profile comparison, and a 2D field-slice view. The viewer can also export an HTML report for presentation.
+
+To generate the report directly from the terminal:
+
+```powershell
+python gui\laboltz_viewer.py outputs --export-report
+```
