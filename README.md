@@ -1,3 +1,5 @@
+![LaBoltz benchmark fields](assets/laboltz_header.png)
+
 # LaBoltz
 
 LaBoltz is a general-purpose Lattice Boltzmann Method framework for fluid and energy research. The immediate goal is a verified incompressible-flow foundation that can grow into 3D, transient, transport, multiphase, and electrochemical simulations.
