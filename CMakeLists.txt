@@ -32,6 +32,9 @@ if(LBM_BUILD_EXAMPLES)
 
   add_executable(lbm_poiseuille examples/poiseuille_flow.cpp)
   target_link_libraries(lbm_poiseuille PRIVATE lbm::core)
+
+  add_executable(lbm_couette examples/couette_flow.cpp)
+  target_link_libraries(lbm_couette PRIVATE lbm::core)
 endif()
 
 include(CTest)

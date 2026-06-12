@@ -1,3 +1,4 @@
+#include "lbm/boundary.hpp"
 #include "lbm/collision.hpp"
 #include "lbm/equilibrium.hpp"
 #include "lbm/geometry.hpp"
@@ -90,6 +91,30 @@ void test_streaming_bounce_back_reflects_from_solid_cell() {
   require(destination(1, left) == 0.0, "Bounce-back affected an unrelated cell");
 }
 
+void test_moving_bounce_back_applies_wall_correction() {
+  using Lattice = lbm::D3Q19;
+
+  const lbm::Extent3D extent{3, 3, 1};
+  lbm::PopulationField<Lattice> source(extent);
+  lbm::PopulationField<Lattice> destination(extent);
+  lbm::GeometryField geometry(extent);
+  lbm::BoundaryVelocityField wall_velocity(extent);
+
+  const std::size_t center = lbm::cell_index(extent, 1, 1, 0);
+  const std::size_t top_right = lbm::cell_index(extent, 2, 2, 0);
+
+  geometry(top_right) = lbm::CellType::Solid;
+  wall_velocity(top_right) = {0.1, 0.0, 0.0};
+  source(7, center) = 1.0;
+
+  lbm::stream_periodic_moving_bounce_back(source, destination, geometry, wall_velocity);
+
+  const double expected = 1.0 - 2.0 * Lattice::weights[7] * 0.1 / Lattice::cs2;
+  require(
+      std::abs(destination(8, center) - expected) < tolerance,
+      "Moving bounce-back did not apply the wall-velocity correction");
+}
+
 void test_bgk_preserves_mass_for_periodic_step() {
   using Lattice = lbm::D3Q19;
 
@@ -150,6 +175,7 @@ int main() {
   test_equilibrium_recovers_macroscopic_values<lbm::D3Q27>();
   test_streaming_is_periodic();
   test_streaming_bounce_back_reflects_from_solid_cell();
+  test_moving_bounce_back_applies_wall_correction();
   test_bgk_preserves_mass_for_periodic_step();
   test_geometry_aware_collision_skips_solid_cells();
   test_guo_forcing_preserves_mass_and_adds_momentum();

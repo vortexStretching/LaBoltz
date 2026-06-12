@@ -44,6 +44,7 @@ class VtkData:
 @dataclass
 class CaseData:
     output_dir: Path
+    case_name: str = "case"
     history: list[dict[str, float]] = field(default_factory=list)
     profile: list[dict[str, float]] = field(default_factory=list)
     vtk: VtkData | None = None
@@ -120,17 +121,57 @@ def parse_legacy_vtk(path: Path) -> VtkData:
     return vtk
 
 
-def load_case(output_dir: Path) -> CaseData:
+def case_label(case_name: str) -> str:
+    return case_name.replace("_", " ").title()
+
+
+def discover_cases(output_dir: Path) -> list[str]:
     output_dir = output_dir.resolve()
-    final_vtk = output_dir / "poiseuille_final.vtk"
+    cases: set[str] = set()
+    for path in output_dir.glob("*_history.csv"):
+        cases.add(path.name.removesuffix("_history.csv"))
+    for path in output_dir.glob("*_profile.csv"):
+        cases.add(path.name.removesuffix("_profile.csv"))
+    for path in output_dir.glob("*_final.vtk"):
+        cases.add(path.name.removesuffix("_final.vtk"))
+    return sorted(cases)
+
+
+def latest_case(output_dir: Path, cases: list[str]) -> str | None:
+    newest_case_name: str | None = None
+    newest_time = -1.0
+    for name in cases:
+        paths = [
+            output_dir / f"{name}_history.csv",
+            output_dir / f"{name}_profile.csv",
+            output_dir / f"{name}_final.vtk",
+        ]
+        paths.extend(output_dir.glob(f"{name}_step_*.vtk"))
+        for path in paths:
+            if path.exists():
+                modified = path.stat().st_mtime
+                if modified > newest_time:
+                    newest_time = modified
+                    newest_case_name = name
+    return newest_case_name
+
+
+def load_case(output_dir: Path, case_name: str | None = None) -> CaseData:
+    output_dir = output_dir.resolve()
+    cases = discover_cases(output_dir)
+    if case_name is None:
+        case_name = latest_case(output_dir, cases) or (cases[0] if cases else "case")
+
+    final_vtk = output_dir / f"{case_name}_final.vtk"
     if not final_vtk.exists():
-        vtk_files = sorted(output_dir.glob("*.vtk"))
+        vtk_files = sorted(output_dir.glob(f"{case_name}_*.vtk"))
         final_vtk = vtk_files[-1] if vtk_files else final_vtk
 
     return CaseData(
         output_dir=output_dir,
-        history=read_float_csv(output_dir / "poiseuille_history.csv"),
-        profile=read_float_csv(output_dir / "poiseuille_profile.csv"),
+        case_name=case_name,
+        history=read_float_csv(output_dir / f"{case_name}_history.csv"),
+        profile=read_float_csv(output_dir / f"{case_name}_profile.csv"),
         vtk=parse_legacy_vtk(final_vtk) if final_vtk.exists() else None,
     )
 
@@ -343,6 +384,8 @@ class LaboltzViewer:
         self.root.minsize(960, 640)
         self.output_dir = initial_dir
         self.case = CaseData(output_dir=initial_dir)
+        self.available_cases: list[str] = []
+        self.case_var = StringVar(value="")
         self.metric_var = StringVar(value="relative_l2_error")
         self.field_var = StringVar(value="velocity_x")
         self.slice_var = StringVar(value="0")
@@ -374,6 +417,10 @@ class LaboltzViewer:
         ttk.Button(top_bar, text="Open Output Folder", command=self.choose_output_dir).pack(side=RIGHT, padx=(6, 0))
         ttk.Button(top_bar, text="Export HTML Report", command=self.export_report).pack(side=RIGHT, padx=(6, 0))
         ttk.Button(top_bar, text="Refresh", command=lambda: self.load_output_dir(self.output_dir)).pack(side=RIGHT, padx=(6, 0))
+        self.case_box = ttk.Combobox(top_bar, textvariable=self.case_var, state="readonly", width=18)
+        self.case_box.pack(side=RIGHT, padx=(6, 12))
+        self.case_box.bind("<<ComboboxSelected>>", lambda _event: self.load_output_dir(self.output_dir, self.case_var.get()))
+        ttk.Label(top_bar, text="Case").pack(side=RIGHT)
 
         self.status = ttk.Label(main, text="", anchor="w")
         self.status.pack(side=BOTTOM, fill=X, pady=(8, 0))
@@ -441,11 +488,14 @@ class LaboltzViewer:
         if directory:
             self.load_output_dir(Path(directory))
 
-    def load_output_dir(self, output_dir: Path) -> None:
+    def load_output_dir(self, output_dir: Path, case_name: str | None = None) -> None:
         try:
-            self.case = load_case(output_dir)
+            self.available_cases = discover_cases(output_dir)
+            self.case = load_case(output_dir, case_name)
             self.output_dir = output_dir.resolve()
-            self.status.configure(text=f"Loaded {self.output_dir}")
+            self.case_var.set(self.case.case_name)
+            self.case_box.configure(values=self.available_cases)
+            self.status.configure(text=f"Loaded {case_label(self.case.case_name)} from {self.output_dir}")
             self.refresh_all()
         except Exception as error:
             messagebox.showerror("Could not load output folder", str(error))
@@ -467,13 +517,14 @@ class LaboltzViewer:
         profile = self.case.profile
         vtk = self.case.vtk
         lines = [f"Output folder: {self.case.output_dir}"]
+        lines.append(f"Case: {case_label(self.case.case_name)}")
 
         if history:
             final = history[-1]
             lines.extend(
                 [
                     "",
-                    "Poiseuille convergence",
+                    f"{case_label(self.case.case_name)} convergence",
                     f"  final step: {final.get('step', 0):.0f}",
                     f"  max ux: {final.get('max_ux', 0.0):.6e}",
                     f"  average ux: {final.get('average_ux', 0.0):.6e}",
@@ -582,7 +633,7 @@ class LaboltzViewer:
 
     def export_report(self) -> None:
         try:
-            report_path = self.case.output_dir / "poiseuille_report.html"
+            report_path = self.case.output_dir / f"{self.case.case_name}_report.html"
             report_path.write_text(render_html_report(self.case), encoding="utf-8")
             self.status.configure(text=f"Wrote {report_path}")
             messagebox.showinfo("Report exported", f"Wrote {report_path}")
@@ -661,7 +712,7 @@ def render_html_report(case: CaseData) -> str:
         "<html lang=\"en\">",
         "<head>",
         "<meta charset=\"utf-8\">",
-        "<title>LaBoltz Poiseuille Report</title>",
+        f"<title>LaBoltz {html.escape(case_label(case.case_name))} Report</title>",
         "<style>",
         "body{font-family:Segoe UI,Arial,sans-serif;margin:32px;color:#172033;background:#eef2f6}",
         "main{max-width:980px;margin:auto}",
@@ -673,7 +724,7 @@ def render_html_report(case: CaseData) -> str:
         "</style>",
         "</head>",
         "<body><main>",
-        "<h1>LaBoltz Poiseuille Report</h1>",
+        f"<h1>LaBoltz {html.escape(case_label(case.case_name))} Report</h1>",
         f"<p>Output folder: {html.escape(str(case.output_dir))}</p>",
         "<section><h2>Final Metrics</h2><div class=\"metrics\">",
     ]
@@ -709,9 +760,10 @@ def render_html_report(case: CaseData) -> str:
     return "\n".join(sections)
 
 
-def run_check(output_dir: Path) -> int:
-    case = load_case(output_dir)
+def run_check(output_dir: Path, case_name: str | None = None) -> int:
+    case = load_case(output_dir, case_name)
     print(f"Loaded output folder: {case.output_dir}")
+    print(f"Case: {case.case_name}")
     print(f"History rows: {len(case.history)}")
     print(f"Profile rows: {len(case.profile)}")
     if case.history:
@@ -727,10 +779,10 @@ def run_check(output_dir: Path) -> int:
     return 0
 
 
-def export_report(output_dir: Path, report_path: Path | None = None) -> int:
-    case = load_case(output_dir)
+def export_report(output_dir: Path, case_name: str | None = None, report_path: Path | None = None) -> int:
+    case = load_case(output_dir, case_name)
     if report_path is None:
-        report_path = case.output_dir / "poiseuille_report.html"
+        report_path = case.output_dir / f"{case.case_name}_report.html"
     report_path.write_text(render_html_report(case), encoding="utf-8")
     print(f"Wrote {report_path}")
     return 0
@@ -739,6 +791,7 @@ def export_report(output_dir: Path, report_path: Path | None = None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="LaBoltz research output viewer")
     parser.add_argument("output_dir", nargs="?", default=str(DEFAULT_OUTPUT_DIR), help="Directory containing solver outputs")
+    parser.add_argument("--case", help="Case prefix to load, for example poiseuille or couette")
     parser.add_argument("--check", action="store_true", help="Load data and exit without opening the GUI")
     parser.add_argument("--export-report", action="store_true", help="Write an HTML report and exit without opening the GUI")
     parser.add_argument("--report-path", help="Optional output path for --export-report")
@@ -746,9 +799,9 @@ def main(argv: list[str] | None = None) -> int:
 
     output_dir = Path(args.output_dir)
     if args.check:
-        return run_check(output_dir)
+        return run_check(output_dir, args.case)
     if args.export_report:
-        return export_report(output_dir, Path(args.report_path) if args.report_path else None)
+        return export_report(output_dir, args.case, Path(args.report_path) if args.report_path else None)
 
     root = Tk()
     LaboltzViewer(root, output_dir)

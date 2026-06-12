@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lbm/boundary.hpp"
 #include "lbm/domain.hpp"
 #include "lbm/geometry.hpp"
 #include "lbm/population.hpp"
@@ -77,6 +78,56 @@ void stream_periodic_bounce_back(
             destination(q, target_cell) = source(q, source_cell);
           } else {
             destination(Lattice::opposite[q], source_cell) = source(q, source_cell);
+          }
+        }
+      }
+    }
+  }
+}
+
+template <typename Lattice>
+void stream_periodic_moving_bounce_back(
+    const PopulationField<Lattice>& source,
+    PopulationField<Lattice>& destination,
+    const GeometryField& geometry,
+    const BoundaryVelocityField& wall_velocity,
+    const double wall_density = 1.0) {
+  validate_matching_extents(source.extent(), destination.extent());
+  validate_matching_extents(source.extent(), geometry.extent());
+  validate_matching_extents(source.extent(), wall_velocity.extent());
+
+  const Extent3D& extent = source.extent();
+  destination.fill(0.0);
+
+  for (std::size_t z = 0; z < extent.nz; ++z) {
+    for (std::size_t y = 0; y < extent.ny; ++y) {
+      for (std::size_t x = 0; x < extent.nx; ++x) {
+        const std::size_t source_cell = cell_index(extent, x, y, z);
+
+        if (geometry.is_solid(source_cell)) {
+          continue;
+        }
+
+        for (std::size_t q = 0; q < Lattice::q; ++q) {
+          const auto& c = Lattice::velocities[q];
+          const std::size_t target_x = periodic_offset(x, c[0], extent.nx);
+          const std::size_t target_y = periodic_offset(y, c[1], extent.ny);
+          const std::size_t target_z = periodic_offset(z, c[2], extent.nz);
+          const std::size_t target_cell = cell_index(extent, target_x, target_y, target_z);
+
+          if (geometry.is_fluid(target_cell)) {
+            destination(q, target_cell) = source(q, source_cell);
+          } else {
+            const auto velocity = wall_velocity(target_cell);
+            const double c_dot_wall_velocity =
+                static_cast<double>(c[0]) * velocity[0] +
+                static_cast<double>(c[1]) * velocity[1] +
+                static_cast<double>(c[2]) * velocity[2];
+            const double moving_wall_correction =
+                2.0 * Lattice::weights[q] * wall_density * c_dot_wall_velocity /
+                Lattice::cs2;
+            destination(Lattice::opposite[q], source_cell) =
+                source(q, source_cell) - moving_wall_correction;
           }
         }
       }

@@ -65,7 +65,13 @@ The first verification benchmark is planar Poiseuille flow:
 .\build\Release\lbm_poiseuille.exe --steps 5000 --report 1000 --vtk-interval 5000
 ```
 
-It writes VTK and CSV diagnostics under `outputs/`.
+The second benchmark is planar Couette flow with a moving upper wall:
+
+```powershell
+.\build\Release\lbm_couette.exe --steps 6000 --report 1000 --vtk-interval 6000
+```
+
+Both benchmarks write VTK and CSV diagnostics under `outputs/`.
 
 The growing benchmark ladder is tracked in [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -77,10 +83,10 @@ The current lightweight GUI uses only Python's standard library, so it works eve
 powershell -ExecutionPolicy Bypass -File scripts\run_gui.ps1
 ```
 
-It loads `outputs/poiseuille_history.csv`, `outputs/poiseuille_profile.csv`, and `outputs/poiseuille_final.vtk`, then shows convergence plots, profile comparison, and a 2D field-slice view. The viewer can also export an HTML report for presentation.
+It detects benchmark outputs such as `poiseuille_*` and `couette_*`, then shows convergence plots, profile comparison, and a 2D field-slice view. The viewer can also export an HTML report for presentation.
 
 To generate the report directly from the terminal:
 
 ```powershell
-python gui\laboltz_viewer.py outputs --export-report
+python gui\laboltz_viewer.py outputs --case couette --export-report
 ```

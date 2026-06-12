@@ -8,14 +8,14 @@ The verification suite should grow from simple, analytically constrained flows t
 | --- | --- | --- | --- |
 | Periodic uniform flow | Streaming, mass conservation | Total mass, uniform velocity preservation | Smoke example |
 | Planar Poiseuille flow | No-slip walls, forcing, viscosity | Parabolic profile, convergence history, mass conservation | First benchmark |
-| Couette flow | Moving wall boundary condition | Linear profile, wall velocity enforcement | Planned |
+| Couette flow | Moving wall boundary condition | Linear profile, wall velocity enforcement | First benchmark |
 | Taylor-Green vortex | Transient viscous decay | Kinetic-energy decay, grid convergence | Planned |
 
 ## Tier 2: Canonical CFD Benchmarks
 
 | Case | Purpose | Primary Checks | Status |
 | --- | --- | --- | --- |
-| Lid-driven cavity | Recirculation and corner vortices | Centerline velocity profiles vs Ghia et al. | Planned |
+| Lid-driven cavity | Recirculation and corner vortices | Centerline velocity profiles vs Ghia et al. | Planned next |
 | Backward-facing step | Separation and reattachment | Reattachment length vs benchmark data | Planned |
 | Von Karman vortex street | Unsteady bluff-body shedding | Strouhal number, drag/lift history | Planned |
 | Taylor-Couette flow | Rotating-wall flow and instability onset | Azimuthal velocity profile, torque | Planned |
@@ -36,4 +36,3 @@ Each benchmark should eventually provide:
 - CSV convergence and diagnostic history
 - A reference comparison against analytical, experimental, DNS, or literature data
 - A regression test with a short runtime
-

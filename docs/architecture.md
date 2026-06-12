@@ -5,6 +5,7 @@ The framework is organized around a small set of separable concepts:
 - **Lattice definitions** describe discrete velocities, weights, and opposite directions.
 - **Population fields** own distribution functions using `f[q][cell]` Structure-of-Arrays storage.
 - **Geometry fields** identify fluid and solid cells for boundary handling.
+- **Boundary velocity fields** store moving-wall velocities independently from solid/fluid geometry.
 - **Macroscopic operators** compute density and velocity from populations.
 - **Collision operators** relax populations toward equilibrium.
 - **Forcing operators** add body forces using a Guo forcing term.
