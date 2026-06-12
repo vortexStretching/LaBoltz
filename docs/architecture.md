@@ -7,6 +7,7 @@ The framework is organized around a small set of separable concepts:
 - **Geometry fields** identify fluid and solid cells for boundary handling.
 - **Macroscopic operators** compute density and velocity from populations.
 - **Collision operators** relax populations toward equilibrium.
+- **Forcing operators** add body forces using a Guo forcing term.
 - **Streaming operators** move populations between cells.
 - **I/O helpers** write simulation fields for visualization and regression checks.
 

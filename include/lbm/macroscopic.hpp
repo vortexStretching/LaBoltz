@@ -43,6 +43,20 @@ template <typename Lattice>
 }
 
 template <typename Lattice>
+[[nodiscard]] Macroscopic macroscopic_at_with_acceleration(
+    const PopulationField<Lattice>& field,
+    const std::size_t cell,
+    const std::array<double, 3>& acceleration) {
+  Macroscopic result = macroscopic_at(field, cell);
+
+  result.velocity[0] += 0.5 * acceleration[0];
+  result.velocity[1] += 0.5 * acceleration[1];
+  result.velocity[2] += 0.5 * acceleration[2];
+
+  return result;
+}
+
+template <typename Lattice>
 [[nodiscard]] double total_mass(const PopulationField<Lattice>& field) noexcept {
   double mass = 0.0;
   for (double value : field.data()) {
@@ -52,4 +66,3 @@ template <typename Lattice>
 }
 
 }  // namespace lbm
-

@@ -1,5 +1,6 @@
 build/
 out/
+outputs/
 .vs/
 .vscode/
 .idea/
@@ -14,4 +15,3 @@ out/
 *.hdf5
 __pycache__/
 *.pyc
-

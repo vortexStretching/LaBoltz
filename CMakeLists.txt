@@ -29,6 +29,9 @@ endif()
 if(LBM_BUILD_EXAMPLES)
   add_executable(lbm_periodic_smoke examples/periodic_smoke.cpp)
   target_link_libraries(lbm_periodic_smoke PRIVATE lbm::core)
+
+  add_executable(lbm_poiseuille examples/poiseuille_flow.cpp)
+  target_link_libraries(lbm_poiseuille PRIVATE lbm::core)
 endif()
 
 include(CTest)
@@ -38,4 +41,3 @@ if(LBM_BUILD_TESTS AND BUILD_TESTING)
   target_link_libraries(lbm_core_tests PRIVATE lbm::core)
   add_test(NAME lbm_core_tests COMMAND lbm_core_tests)
 endif()
-
