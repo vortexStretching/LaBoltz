@@ -25,27 +25,29 @@
 namespace {
 
 struct Config {
-  std::size_t nx = 64;
-  std::size_t ny = 24;
+  std::size_t nx = 66;
+  std::size_t ny = 66;
   std::size_t nz = 4;
-  int steps = 6000;
+  int steps = 8000;
   int report_interval = 1000;
-  int vtk_interval = 3000;
+  int vtk_interval = 4000;
   double tau = 0.8;
-  double wall_velocity = 0.05;
+  double lid_velocity = 0.05;
 };
 
 struct Stats {
-  double max_ux{};
-  double average_ux{};
-  double relative_l2_error{};
+  double max_speed{};
+  double average_speed{};
+  double center_ux{};
+  double center_uy{};
+  double kinetic_energy{};
   double fluid_mass{};
 };
 
 void print_usage(const char* executable) {
   std::cout << "Usage: " << executable
             << " [--steps N] [--report N] [--vtk-interval N] [--nx N] [--ny N] [--nz N]"
-               " [--tau VALUE] [--wall-velocity VALUE]\n";
+               " [--tau VALUE] [--lid-velocity VALUE]\n";
 }
 
 Config parse_arguments(const int argc, char** argv) {
@@ -77,15 +79,18 @@ Config parse_arguments(const int argc, char** argv) {
       config.nz = static_cast<std::size_t>(std::stoull(require_value(arg)));
     } else if (arg == "--tau") {
       config.tau = std::stod(require_value(arg));
-    } else if (arg == "--wall-velocity") {
-      config.wall_velocity = std::stod(require_value(arg));
+    } else if (arg == "--lid-velocity") {
+      config.lid_velocity = std::stod(require_value(arg));
     } else {
       throw std::invalid_argument("Unknown argument: " + arg);
     }
   }
 
-  if (config.nx == 0 || config.ny < 4 || config.nz == 0) {
-    throw std::invalid_argument("Couette domain requires nx > 0, ny >= 4, and nz > 0");
+  if (config.nx < 8 || config.ny < 8 || config.nz == 0) {
+    throw std::invalid_argument("Lid-driven cavity requires nx >= 8, ny >= 8, and nz > 0");
+  }
+  if (config.nx != config.ny) {
+    throw std::invalid_argument("The first lid-driven cavity benchmark expects a square nx == ny domain");
   }
   if (config.steps < 0 || config.report_interval <= 0 || config.vtk_interval <= 0) {
     throw std::invalid_argument("Step and interval values must be positive");
@@ -97,24 +102,12 @@ Config parse_arguments(const int argc, char** argv) {
   return config;
 }
 
-double analytical_ux(
-    const std::size_t y,
-    const lbm::Extent3D& extent,
-    const double wall_velocity) {
-  const double channel_height = static_cast<double>(extent.ny) - 2.0;
-  const double y_from_lower_wall = static_cast<double>(y) - 0.5;
-  return wall_velocity * y_from_lower_wall / channel_height;
-}
-
 template <typename Lattice>
 Stats compute_stats(
     const lbm::PopulationField<Lattice>& field,
-    const lbm::GeometryField& geometry,
-    const double wall_velocity) {
+    const lbm::GeometryField& geometry) {
   Stats stats{};
-  double sum_ux = 0.0;
-  double error_norm = 0.0;
-  double reference_norm = 0.0;
+  double sum_speed = 0.0;
   std::size_t fluid_count = 0;
   const lbm::Extent3D& extent = field.extent();
 
@@ -127,25 +120,33 @@ Stats compute_stats(
         }
 
         const auto macro = lbm::macroscopic_at(field, cell);
-        const double ux = macro.velocity[0];
-        const double reference = analytical_ux(y, extent, wall_velocity);
-        const double error = ux - reference;
+        const double speed = std::sqrt(
+            macro.velocity[0] * macro.velocity[0] +
+            macro.velocity[1] * macro.velocity[1] +
+            macro.velocity[2] * macro.velocity[2]);
 
-        stats.max_ux = std::max(stats.max_ux, ux);
-        sum_ux += ux;
+        stats.max_speed = std::max(stats.max_speed, speed);
+        sum_speed += speed;
         stats.fluid_mass += macro.rho;
-        error_norm += error * error;
-        reference_norm += reference * reference;
+        stats.kinetic_energy += 0.5 * macro.rho * speed * speed;
         ++fluid_count;
       }
     }
   }
 
-  if (fluid_count > 0) {
-    stats.average_ux = sum_ux / static_cast<double>(fluid_count);
+  const std::size_t center_x = extent.nx / 2;
+  const std::size_t center_y = extent.ny / 2;
+  for (std::size_t z = 0; z < extent.nz; ++z) {
+    const auto macro = lbm::macroscopic_at(field, lbm::cell_index(extent, center_x, center_y, z));
+    stats.center_ux += macro.velocity[0];
+    stats.center_uy += macro.velocity[1];
   }
-  if (reference_norm > 0.0) {
-    stats.relative_l2_error = std::sqrt(error_norm / reference_norm);
+  stats.center_ux /= static_cast<double>(extent.nz);
+  stats.center_uy /= static_cast<double>(extent.nz);
+
+  if (fluid_count > 0) {
+    stats.average_speed = sum_speed / static_cast<double>(fluid_count);
+    stats.kinetic_energy /= static_cast<double>(fluid_count);
   }
 
   return stats;
@@ -154,40 +155,38 @@ Stats compute_stats(
 template <typename Lattice>
 void write_profile_csv(
     const std::filesystem::path& path,
-    const lbm::PopulationField<Lattice>& field,
-    const lbm::GeometryField& geometry,
-    const double wall_velocity) {
+    const lbm::PopulationField<Lattice>& field) {
   std::ofstream out(path);
   if (!out) {
     throw std::runtime_error("Could not open profile CSV: " + path.string());
   }
 
   const lbm::Extent3D& extent = field.extent();
-  std::vector<double> sum_ux(extent.ny, 0.0);
-  std::vector<std::size_t> count(extent.ny, 0);
+  const std::size_t center_x = extent.nx / 2;
+  const std::size_t center_y = extent.ny / 2;
+  const std::size_t sample_count = extent.nx - 2;
 
-  for (std::size_t z = 0; z < extent.nz; ++z) {
-    for (std::size_t y = 0; y < extent.ny; ++y) {
-      for (std::size_t x = 0; x < extent.nx; ++x) {
-        const std::size_t cell = lbm::cell_index(extent, x, y, z);
-        if (geometry.is_solid(cell)) {
-          continue;
-        }
-        const auto macro = lbm::macroscopic_at(field, cell);
-        sum_ux[y] += macro.velocity[0];
-        ++count[y];
-      }
-    }
-  }
+  out << "coordinate,vertical_centerline_ux,horizontal_centerline_uy\n";
+  for (std::size_t index = 0; index < sample_count; ++index) {
+    const std::size_t fluid_coordinate = index + 1;
+    double vertical_ux = 0.0;
+    double horizontal_uy = 0.0;
 
-  out << "y,y_from_lower_wall,ux_mean,ux_analytical\n";
-  for (std::size_t y = 0; y < extent.ny; ++y) {
-    if (count[y] == 0) {
-      continue;
+    for (std::size_t z = 0; z < extent.nz; ++z) {
+      const auto vertical_macro =
+          lbm::macroscopic_at(field, lbm::cell_index(extent, center_x, fluid_coordinate, z));
+      const auto horizontal_macro =
+          lbm::macroscopic_at(field, lbm::cell_index(extent, fluid_coordinate, center_y, z));
+      vertical_ux += vertical_macro.velocity[0];
+      horizontal_uy += horizontal_macro.velocity[1];
     }
-    const double ux_mean = sum_ux[y] / static_cast<double>(count[y]);
-    out << y << ',' << (static_cast<double>(y) - 0.5) << ',' << ux_mean << ','
-        << analytical_ux(y, extent, wall_velocity) << '\n';
+
+    vertical_ux /= static_cast<double>(extent.nz);
+    horizontal_uy /= static_cast<double>(extent.nz);
+
+    const double normalized_coordinate =
+        (static_cast<double>(fluid_coordinate) - 0.5) / static_cast<double>(extent.nx - 2);
+    out << normalized_coordinate << ',' << vertical_ux << ',' << horizontal_uy << '\n';
   }
 }
 
@@ -207,10 +206,10 @@ int main(int argc, char** argv) {
     const lbm::Extent3D extent{config.nx, config.ny, config.nz};
     const double omega = 1.0 / config.tau;
     const double viscosity = Lattice::cs2 * (config.tau - 0.5);
-    const double channel_height = static_cast<double>(extent.ny) - 2.0;
-    const double reynolds = config.wall_velocity * channel_height / viscosity;
+    const double characteristic_length = static_cast<double>(extent.ny - 2);
+    const double reynolds = config.lid_velocity * characteristic_length / viscosity;
     const std::filesystem::path output_directory =
-        lbm::create_simulation_output_directory("outputs", "couette");
+        lbm::create_simulation_output_directory("outputs", "lid_driven_cavity");
 
     lbm::PopulationField<Lattice> current(extent);
     lbm::PopulationField<Lattice> scratch(extent);
@@ -220,10 +219,14 @@ int main(int argc, char** argv) {
     lbm::initialize_equilibrium(current, 1.0, {0.0, 0.0, 0.0});
 
     for (std::size_t z = 0; z < extent.nz; ++z) {
+      for (std::size_t y = 0; y < extent.ny; ++y) {
+        geometry(0, y, z) = lbm::CellType::Solid;
+        geometry(extent.nx - 1, y, z) = lbm::CellType::Solid;
+      }
       for (std::size_t x = 0; x < extent.nx; ++x) {
         geometry(x, 0, z) = lbm::CellType::Solid;
         geometry(x, extent.ny - 1, z) = lbm::CellType::Solid;
-        wall_velocity(x, extent.ny - 1, z) = {config.wall_velocity, 0.0, 0.0};
+        wall_velocity(x, extent.ny - 1, z) = {config.lid_velocity, 0.0, 0.0};
       }
     }
 
@@ -237,46 +240,47 @@ int main(int argc, char** argv) {
       }
     }
 
-    const auto history_path = output_directory / "couette_history.csv";
+    const auto history_path = output_directory / "lid_driven_cavity_history.csv";
     std::ofstream history(history_path);
     if (!history) {
       throw std::runtime_error("Could not open convergence history CSV");
     }
-    history << "step,max_ux,average_ux,relative_l2_error,fluid_mass,relative_max_change\n";
+    history << "step,max_speed,average_speed,center_ux,center_uy,kinetic_energy,fluid_mass,relative_max_change\n";
 
-    std::cout << "Couette flow benchmark\n";
+    std::cout << "Lid-driven cavity benchmark\n";
     std::cout << "Domain: " << extent.nx << " x " << extent.ny << " x " << extent.nz << '\n';
     std::cout << "tau=" << config.tau << " omega=" << omega << " viscosity=" << viscosity
-              << " wall_velocity=" << config.wall_velocity << " Re=" << reynolds << "\n\n";
+              << " lid_velocity=" << config.lid_velocity << " Re=" << reynolds << '\n';
     std::cout << "Output directory: " << output_directory.string() << "\n\n";
-    std::cout << std::setw(8) << "step" << std::setw(16) << "max_ux" << std::setw(16)
-              << "avg_ux" << std::setw(16) << "L2_error" << std::setw(16) << "rel_change"
-              << '\n';
+    std::cout << std::setw(8) << "step" << std::setw(16) << "max_speed" << std::setw(16)
+              << "avg_speed" << std::setw(16) << "center_ux" << std::setw(16)
+              << "center_uy" << std::setw(16) << "rel_change" << '\n';
 
-    double previous_max_ux = 0.0;
+    double previous_max_speed = 0.0;
     auto log_stats = [&](const int step) {
-      const Stats stats = compute_stats(current, geometry, config.wall_velocity);
+      const Stats stats = compute_stats(current, geometry);
       const double relative_change =
-          (std::abs(stats.max_ux) > 0.0)
-              ? std::abs(stats.max_ux - previous_max_ux) / std::abs(stats.max_ux)
+          (std::abs(stats.max_speed) > 0.0)
+              ? std::abs(stats.max_speed - previous_max_speed) / std::abs(stats.max_speed)
               : 0.0;
-      previous_max_ux = stats.max_ux;
+      previous_max_speed = stats.max_speed;
 
-      history << step << ',' << stats.max_ux << ',' << stats.average_ux << ','
-              << stats.relative_l2_error << ',' << stats.fluid_mass << ',' << relative_change
-              << '\n';
+      history << step << ',' << stats.max_speed << ',' << stats.average_speed << ','
+              << stats.center_ux << ',' << stats.center_uy << ',' << stats.kinetic_energy
+              << ',' << stats.fluid_mass << ',' << relative_change << '\n';
 
-      std::cout << std::setw(8) << step << std::setw(16) << std::scientific << stats.max_ux
-                << std::setw(16) << stats.average_ux << std::setw(16)
-                << stats.relative_l2_error << std::setw(16) << relative_change << '\n';
+      std::cout << std::setw(8) << step << std::setw(16) << std::scientific
+                << stats.max_speed << std::setw(16) << stats.average_speed
+                << std::setw(16) << stats.center_ux << std::setw(16)
+                << stats.center_uy << std::setw(16) << relative_change << '\n';
     };
 
     log_stats(0);
     lbm::write_legacy_vtk(
-        (output_directory / "couette_step_000000.vtk").string(),
+        (output_directory / "lid_driven_cavity_step_000000.vtk").string(),
         current,
         geometry,
-        "Couette flow step 0");
+        "Lid-driven cavity step 0");
 
     for (int step = 1; step <= config.steps; ++step) {
       lbm::collide_and_stream_moving_bounce_back(
@@ -288,28 +292,24 @@ int main(int argc, char** argv) {
 
       if (step % config.vtk_interval == 0) {
         lbm::write_legacy_vtk(
-            (output_directory / ("couette_step_" + step_tag(step) + ".vtk")).string(),
+            (output_directory / ("lid_driven_cavity_step_" + step_tag(step) + ".vtk")).string(),
             current,
             geometry,
-            "Couette flow");
+            "Lid-driven cavity");
       }
     }
 
     lbm::write_legacy_vtk(
-        (output_directory / "couette_final.vtk").string(),
+        (output_directory / "lid_driven_cavity_final.vtk").string(),
         current,
         geometry,
-        "Couette flow final");
-    write_profile_csv(
-        output_directory / "couette_profile.csv",
-        current,
-        geometry,
-        config.wall_velocity);
+        "Lid-driven cavity final");
+    write_profile_csv(output_directory / "lid_driven_cavity_profile.csv", current);
 
     std::cout << "\nWrote:\n";
-    std::cout << "  " << (output_directory / "couette_history.csv").string() << '\n';
-    std::cout << "  " << (output_directory / "couette_profile.csv").string() << '\n';
-    std::cout << "  " << (output_directory / "couette_final.vtk").string() << '\n';
+    std::cout << "  " << (output_directory / "lid_driven_cavity_history.csv").string() << '\n';
+    std::cout << "  " << (output_directory / "lid_driven_cavity_profile.csv").string() << '\n';
+    std::cout << "  " << (output_directory / "lid_driven_cavity_final.vtk").string() << '\n';
   } catch (const std::exception& error) {
     std::cerr << "Error: " << error.what() << '\n';
     print_usage(argv[0]);

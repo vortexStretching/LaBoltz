@@ -2,6 +2,7 @@
 #include "lbm/initialization.hpp"
 #include "lbm/lattice.hpp"
 #include "lbm/macroscopic.hpp"
+#include "lbm/output.hpp"
 #include "lbm/population.hpp"
 #include "lbm/solver_step.hpp"
 #include "lbm/vtk.hpp"
@@ -214,9 +215,8 @@ int main(int argc, char** argv) {
     const double analytical_max_ux =
         config.acceleration * channel_height * channel_height / (8.0 * viscosity);
     const std::array<double, 3> acceleration{config.acceleration, 0.0, 0.0};
-    const std::filesystem::path output_directory{"outputs"};
-
-    std::filesystem::create_directories(output_directory);
+    const std::filesystem::path output_directory =
+        lbm::create_simulation_output_directory("outputs", "poiseuille");
 
     lbm::PopulationField<Lattice> current(extent);
     lbm::PopulationField<Lattice> scratch(extent);
@@ -253,6 +253,7 @@ int main(int argc, char** argv) {
     std::cout << "tau=" << config.tau << " omega=" << omega << " viscosity=" << viscosity
               << " acceleration=" << config.acceleration << '\n';
     std::cout << "Analytical max ux: " << analytical_max_ux << "\n\n";
+    std::cout << "Output directory: " << output_directory.string() << "\n\n";
     std::cout << std::setw(8) << "step" << std::setw(16) << "max_ux" << std::setw(16)
               << "avg_ux" << std::setw(16) << "L2_error" << std::setw(16) << "rel_change"
               << '\n';

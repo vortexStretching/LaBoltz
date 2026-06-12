@@ -15,7 +15,7 @@ The verification suite should grow from simple, analytically constrained flows t
 
 | Case | Purpose | Primary Checks | Status |
 | --- | --- | --- | --- |
-| Lid-driven cavity | Recirculation and corner vortices | Centerline velocity profiles vs Ghia et al. | Planned next |
+| Lid-driven cavity | Recirculation and corner vortices | Centerline velocity profiles vs Ghia et al. | First benchmark |
 | Backward-facing step | Separation and reattachment | Reattachment length vs benchmark data | Planned |
 | Von Karman vortex street | Unsteady bluff-body shedding | Strouhal number, drag/lift history | Planned |
 | Taylor-Couette flow | Rotating-wall flow and instability onset | Azimuthal velocity profile, torque | Planned |

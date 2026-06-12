@@ -71,7 +71,19 @@ The second benchmark is planar Couette flow with a moving upper wall:
 .\build\Release\lbm_couette.exe --steps 6000 --report 1000 --vtk-interval 6000
 ```
 
-Both benchmarks write VTK and CSV diagnostics under `outputs/`.
+These benchmarks write VTK and CSV diagnostics under `outputs/`.
+
+The third benchmark is lid-driven cavity flow:
+
+```powershell
+.\build\Release\lbm_lid_driven_cavity.exe --steps 8000 --report 1000 --vtk-interval 4000
+```
+
+Each benchmark run writes into its own timestamped folder:
+
+```text
+outputs\YYYYMMDD_HHMMSS_case_name\
+```
 
 The growing benchmark ladder is tracked in [docs/benchmarks.md](docs/benchmarks.md).
 
@@ -83,10 +95,10 @@ The current lightweight GUI uses only Python's standard library, so it works eve
 powershell -ExecutionPolicy Bypass -File scripts\run_gui.ps1
 ```
 
-It detects benchmark outputs such as `poiseuille_*` and `couette_*`, then shows convergence plots, profile comparison, and a 2D field-slice view. The viewer can also export an HTML report for presentation.
+It detects timestamped benchmark folders such as `outputs\YYYYMMDD_HHMMSS_poiseuille\`, then shows convergence plots, profile comparison, and a 2D field-slice view. The viewer can also export an HTML report for presentation.
 
 To generate the report directly from the terminal:
 
 ```powershell
-python gui\laboltz_viewer.py outputs --case couette --export-report
+python gui\laboltz_viewer.py outputs --case lid_driven_cavity --export-report
 ```

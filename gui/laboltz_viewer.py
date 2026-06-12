@@ -137,6 +137,37 @@ def discover_cases(output_dir: Path) -> list[str]:
     return sorted(cases)
 
 
+def latest_case_file_time(output_dir: Path, case_name: str | None = None) -> float:
+    newest = -1.0
+    prefix = case_name if case_name else "*"
+    for pattern in [f"{prefix}_history.csv", f"{prefix}_profile.csv", f"{prefix}_final.vtk", f"{prefix}_step_*.vtk"]:
+        for path in output_dir.glob(pattern):
+            if path.is_file():
+                newest = max(newest, path.stat().st_mtime)
+    return newest
+
+
+def resolve_output_dir(output_dir: Path, case_name: str | None = None) -> Path:
+    output_dir = output_dir.resolve()
+    candidates: list[tuple[float, Path]] = []
+
+    direct_time = latest_case_file_time(output_dir, case_name)
+    if direct_time >= 0.0:
+        candidates.append((direct_time, output_dir))
+
+    for child in output_dir.iterdir() if output_dir.exists() else []:
+        if child.is_dir():
+            modified = latest_case_file_time(child, case_name)
+            if modified >= 0.0:
+                candidates.append((modified, child))
+
+    if not candidates:
+        return output_dir
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
 def latest_case(output_dir: Path, cases: list[str]) -> str | None:
     newest_case_name: str | None = None
     newest_time = -1.0
@@ -157,7 +188,7 @@ def latest_case(output_dir: Path, cases: list[str]) -> str | None:
 
 
 def load_case(output_dir: Path, case_name: str | None = None) -> CaseData:
-    output_dir = output_dir.resolve()
+    output_dir = resolve_output_dir(output_dir, case_name)
     cases = discover_cases(output_dir)
     if case_name is None:
         case_name = latest_case(output_dir, cases) or (cases[0] if cases else "case")
@@ -187,6 +218,24 @@ def finite_range(values: list[float]) -> tuple[float, float]:
         return minimum - padding, maximum + padding
     padding = 0.05 * (maximum - minimum)
     return minimum - padding, maximum + padding
+
+
+def row_columns(rows: list[dict[str, float]]) -> list[str]:
+    if not rows:
+        return []
+    return list(rows[0].keys())
+
+
+def preferred_x_column(rows: list[dict[str, float]]) -> str:
+    columns = row_columns(rows)
+    for name in ["step", "y_from_lower_wall", "coordinate", "x", "y"]:
+        if name in columns:
+            return name
+    return columns[0] if columns else ""
+
+
+def plottable_columns(rows: list[dict[str, float]], x_column: str) -> list[str]:
+    return [name for name in row_columns(rows) if name != x_column]
 
 
 def color_ramp(value: float, minimum: float, maximum: float) -> str:
@@ -490,9 +539,9 @@ class LaboltzViewer:
 
     def load_output_dir(self, output_dir: Path, case_name: str | None = None) -> None:
         try:
-            self.available_cases = discover_cases(output_dir)
             self.case = load_case(output_dir, case_name)
-            self.output_dir = output_dir.resolve()
+            self.output_dir = self.case.output_dir
+            self.available_cases = discover_cases(self.output_dir)
             self.case_var.set(self.case.case_name)
             self.case_box.configure(values=self.available_cases)
             self.status.configure(text=f"Loaded {case_label(self.case.case_name)} from {self.output_dir}")
@@ -503,6 +552,7 @@ class LaboltzViewer:
 
     def refresh_all(self) -> None:
         self.refresh_summary()
+        self.refresh_metric_controls()
         self.refresh_field_controls()
         self.refresh_plots()
         self.refresh_history_table()
@@ -521,24 +571,20 @@ class LaboltzViewer:
 
         if history:
             final = history[-1]
-            lines.extend(
-                [
-                    "",
-                    f"{case_label(self.case.case_name)} convergence",
-                    f"  final step: {final.get('step', 0):.0f}",
-                    f"  max ux: {final.get('max_ux', 0.0):.6e}",
-                    f"  average ux: {final.get('average_ux', 0.0):.6e}",
-                    f"  relative L2 error: {final.get('relative_l2_error', 0.0):.6e}",
-                    f"  relative max change: {final.get('relative_max_change', 0.0):.6e}",
-                    f"  fluid mass: {final.get('fluid_mass', 0.0):.6g}",
-                ]
-            )
+            lines.extend(["", f"{case_label(self.case.case_name)} convergence"])
+            for key, value in final.items():
+                if key == "step":
+                    lines.append(f"  final step: {value:.0f}")
+                else:
+                    lines.append(f"  {key}: {value:.6e}")
         else:
-            lines.extend(["", "No poiseuille_history.csv found."])
+            lines.extend(["", f"No {self.case.case_name}_history.csv found."])
 
         if profile:
-            max_error = max(abs(row["ux_mean"] - row["ux_analytical"]) for row in profile)
-            lines.extend(["", f"Profile rows: {len(profile)}", f"maximum profile error: {max_error:.6e}"])
+            lines.extend(["", f"Profile rows: {len(profile)}"])
+            if "ux_mean" in profile[0] and "ux_analytical" in profile[0]:
+                max_error = max(abs(row["ux_mean"] - row["ux_analytical"]) for row in profile)
+                lines.append(f"maximum profile error: {max_error:.6e}")
 
         if vtk is not None:
             lines.extend(
@@ -554,6 +600,14 @@ class LaboltzViewer:
             lines.extend(["", "No VTK file found."])
 
         self.summary_text.configure(text="\n".join(lines))
+
+    def refresh_metric_controls(self) -> None:
+        metrics = plottable_columns(self.case.history, "step")
+        if not metrics:
+            metrics = ["max_ux", "average_ux", "relative_l2_error", "relative_max_change", "fluid_mass"]
+        self.metric_box.configure(values=metrics)
+        if self.metric_var.get() not in metrics:
+            self.metric_var.set(metrics[0])
 
     def refresh_convergence_plot(self) -> None:
         history = self.case.history
@@ -580,16 +634,30 @@ class LaboltzViewer:
             self.profile_canvas.create_text(320, 180, text="No profile CSV loaded", fill="#42526b", font=("Segoe UI", 12))
             return
 
-        y_values = [row["y_from_lower_wall"] for row in profile]
+        if "y_from_lower_wall" in profile[0]:
+            x_column = "y_from_lower_wall"
+        else:
+            x_column = preferred_x_column(profile)
+        x_values = [row[x_column] for row in profile]
+
+        colors = ["#2a7fbb", "#c94f3d", "#2a9d8f", "#8b5fbf", "#e9a03f"]
+        if "ux_mean" in profile[0] and "ux_analytical" in profile[0]:
+            series = [
+                ("LBM ux", [row["ux_mean"] for row in profile], colors[0]),
+                ("analytical ux", [row["ux_analytical"] for row in profile], colors[1]),
+            ]
+        else:
+            series = [
+                (column, [row[column] for row in profile], colors[index % len(colors)])
+                for index, column in enumerate(plottable_columns(profile, x_column))
+            ]
+
         self.profile_canvas.plot_lines(
-            y_values,
-            [
-                ("LBM ux", [row["ux_mean"] for row in profile], "#2a7fbb"),
-                ("analytical ux", [row["ux_analytical"] for row in profile], "#c94f3d"),
-            ],
-            "Poiseuille Velocity Profile",
-            "distance from lower wall",
-            "ux",
+            x_values,
+            series,
+            f"{case_label(self.case.case_name)} Profile",
+            x_column,
+            "velocity",
         )
 
     def refresh_field_controls(self) -> None:
@@ -729,7 +797,8 @@ def render_html_report(case: CaseData) -> str:
         "<section><h2>Final Metrics</h2><div class=\"metrics\">",
     ]
 
-    for key in ["step", "max_ux", "average_ux", "relative_l2_error", "relative_max_change", "fluid_mass"]:
+    metric_keys = list(final.keys()) if final else ["step"]
+    for key in metric_keys:
         value = final.get(key)
         shown = f"{value:.6g}" if isinstance(value, float) else "n/a"
         sections.append(f"<div class=\"metric\"><div class=\"label\">{html.escape(key)}</div><div class=\"value\">{shown}</div></div>")
@@ -737,17 +806,40 @@ def render_html_report(case: CaseData) -> str:
 
     if history:
         x_values = [row["step"] for row in history]
+        metrics = plottable_columns(history, "step")
+        primary_metric = "relative_l2_error" if "relative_l2_error" in metrics else metrics[0]
         sections.append("<section>")
-        sections.append(render_svg_line_plot(x_values, [("relative_l2_error", [row["relative_l2_error"] for row in history], "#2a7fbb")], "Relative L2 Error", "step", "relative L2 error"))
+        sections.append(render_svg_line_plot(x_values, [(primary_metric, [row[primary_metric] for row in history], "#2a7fbb")], case_label(primary_metric), "step", primary_metric))
         sections.append("</section>")
-        sections.append("<section>")
-        sections.append(render_svg_line_plot(x_values, [("max ux", [row["max_ux"] for row in history], "#2a7fbb"), ("average ux", [row["average_ux"] for row in history], "#c94f3d")], "Velocity Convergence", "step", "ux"))
-        sections.append("</section>")
+        comparison_metrics = [name for name in ["max_ux", "average_ux", "max_speed", "average_speed"] if name in metrics]
+        if len(comparison_metrics) >= 2:
+            colors = ["#2a7fbb", "#c94f3d", "#2a9d8f", "#8b5fbf"]
+            sections.append("<section>")
+            sections.append(render_svg_line_plot(
+                x_values,
+                [(name, [row[name] for row in history], colors[index]) for index, name in enumerate(comparison_metrics[:4])],
+                "Velocity Convergence",
+                "step",
+                "velocity",
+            ))
+            sections.append("</section>")
 
     if profile:
-        y_values = [row["y_from_lower_wall"] for row in profile]
+        x_column = "y_from_lower_wall" if "y_from_lower_wall" in profile[0] else preferred_x_column(profile)
+        x_values = [row[x_column] for row in profile]
+        if "ux_mean" in profile[0] and "ux_analytical" in profile[0]:
+            series = [
+                ("LBM ux", [row["ux_mean"] for row in profile], "#2a7fbb"),
+                ("analytical ux", [row["ux_analytical"] for row in profile], "#c94f3d"),
+            ]
+        else:
+            colors = ["#2a7fbb", "#c94f3d", "#2a9d8f", "#8b5fbf"]
+            series = [
+                (column, [row[column] for row in profile], colors[index % len(colors)])
+                for index, column in enumerate(plottable_columns(profile, x_column)[:4])
+            ]
         sections.append("<section>")
-        sections.append(render_svg_line_plot(y_values, [("LBM ux", [row["ux_mean"] for row in profile], "#2a7fbb"), ("analytical ux", [row["ux_analytical"] for row in profile], "#c94f3d")], "Velocity Profile", "distance from lower wall", "ux"))
+        sections.append(render_svg_line_plot(x_values, series, "Velocity Profile", x_column, "velocity"))
         sections.append("</section>")
 
     if case.vtk is not None:
@@ -768,8 +860,11 @@ def run_check(output_dir: Path, case_name: str | None = None) -> int:
     print(f"Profile rows: {len(case.profile)}")
     if case.history:
         final = case.history[-1]
-        print(f"Final step: {final.get('step', 0):.0f}")
-        print(f"Final relative L2 error: {final.get('relative_l2_error', 0.0):.6e}")
+        for key, value in final.items():
+            if key == "step":
+                print(f"Final step: {value:.0f}")
+            else:
+                print(f"Final {key}: {value:.6e}")
     if case.vtk is not None:
         print(f"VTK: {case.vtk.path.name}")
         print(f"Dimensions: {case.vtk.dimensions}")

@@ -35,6 +35,9 @@ if(LBM_BUILD_EXAMPLES)
 
   add_executable(lbm_couette examples/couette_flow.cpp)
   target_link_libraries(lbm_couette PRIVATE lbm::core)
+
+  add_executable(lbm_lid_driven_cavity examples/lid_driven_cavity.cpp)
+  target_link_libraries(lbm_lid_driven_cavity PRIVATE lbm::core)
 endif()
 
 include(CTest)
