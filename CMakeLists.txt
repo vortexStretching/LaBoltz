@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(
-  CFD_LBM
+  LaBoltz
   VERSION 0.1.0
   DESCRIPTION "General-purpose high-performance Lattice Boltzmann framework"
   LANGUAGES CXX
@@ -38,6 +38,9 @@ if(LBM_BUILD_EXAMPLES)
 
   add_executable(lbm_lid_driven_cavity examples/lid_driven_cavity.cpp)
   target_link_libraries(lbm_lid_driven_cavity PRIVATE lbm::core)
+
+  add_executable(lbm_taylor_green_vortex examples/taylor_green_vortex.cpp)
+  target_link_libraries(lbm_taylor_green_vortex PRIVATE lbm::core)
 endif()
 
 include(CTest)

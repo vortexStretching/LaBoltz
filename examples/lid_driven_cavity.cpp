@@ -33,6 +33,9 @@ struct Config {
   int vtk_interval = 4000;
   double tau = 0.8;
   double lid_velocity = 0.05;
+  double dx_m = 1.0;
+  double dt_s = 1.0;
+  double rho0_kg_m3 = 1.0;
 };
 
 struct Stats {
@@ -47,7 +50,8 @@ struct Stats {
 void print_usage(const char* executable) {
   std::cout << "Usage: " << executable
             << " [--steps N] [--report N] [--vtk-interval N] [--nx N] [--ny N] [--nz N]"
-               " [--tau VALUE] [--lid-velocity VALUE]\n";
+               " [--tau VALUE] [--lid-velocity VALUE] [--dx-m VALUE] [--dt-s VALUE]"
+               " [--rho0-kg-m3 VALUE]\n";
 }
 
 Config parse_arguments(const int argc, char** argv) {
@@ -81,6 +85,12 @@ Config parse_arguments(const int argc, char** argv) {
       config.tau = std::stod(require_value(arg));
     } else if (arg == "--lid-velocity") {
       config.lid_velocity = std::stod(require_value(arg));
+    } else if (arg == "--dx-m") {
+      config.dx_m = std::stod(require_value(arg));
+    } else if (arg == "--dt-s") {
+      config.dt_s = std::stod(require_value(arg));
+    } else if (arg == "--rho0-kg-m3") {
+      config.rho0_kg_m3 = std::stod(require_value(arg));
     } else {
       throw std::invalid_argument("Unknown argument: " + arg);
     }
@@ -97,6 +107,9 @@ Config parse_arguments(const int argc, char** argv) {
   }
   if (config.tau <= 0.5) {
     throw std::invalid_argument("Tau must be greater than 0.5 for positive viscosity");
+  }
+  if (config.dx_m <= 0.0 || config.dt_s <= 0.0 || config.rho0_kg_m3 <= 0.0) {
+    throw std::invalid_argument("SI scaling values dx, dt, and rho0 must be positive");
   }
 
   return config;
@@ -204,12 +217,40 @@ int main(int argc, char** argv) {
   try {
     const Config config = parse_arguments(argc, argv);
     const lbm::Extent3D extent{config.nx, config.ny, config.nz};
+    const lbm::UnitScale units{config.dx_m, config.dt_s, config.rho0_kg_m3};
     const double omega = 1.0 / config.tau;
     const double viscosity = Lattice::cs2 * (config.tau - 0.5);
     const double characteristic_length = static_cast<double>(extent.ny - 2);
     const double reynolds = config.lid_velocity * characteristic_length / viscosity;
     const std::filesystem::path output_directory =
-        lbm::create_simulation_output_directory("outputs", "lid_driven_cavity");
+        lbm::create_simulation_output_directory(
+            "outputs", "lid_driven_cavity", 2, lbm::lattice_name<Lattice>());
+
+    lbm::write_metadata_json(
+        output_directory / "metadata.json",
+        {
+            {"case", lbm::json_string("lid_driven_cavity")},
+            {"physical_dimension", lbm::json_integer(2)},
+            {"solver_dimension", lbm::json_integer(3)},
+            {"lattice", lbm::json_string(lbm::lattice_name<Lattice>())},
+            {"nx", lbm::json_integer(extent.nx)},
+            {"ny", lbm::json_integer(extent.ny)},
+            {"nz", lbm::json_integer(extent.nz)},
+            {"steps", lbm::json_integer(static_cast<std::size_t>(config.steps))},
+            {"tau_lattice", lbm::json_number(config.tau)},
+            {"omega_lattice", lbm::json_number(omega)},
+            {"kinematic_viscosity_lattice", lbm::json_number(viscosity)},
+            {"kinematic_viscosity_m2_s", lbm::json_number(viscosity * units.viscosity_scale_m2_s())},
+            {"lid_velocity_lattice", lbm::json_number(config.lid_velocity)},
+            {"lid_velocity_m_s", lbm::json_number(config.lid_velocity * units.velocity_scale_m_s())},
+            {"reynolds_lattice", lbm::json_number(reynolds)},
+            {"dx_m", lbm::json_number(units.dx_m)},
+            {"dt_s", lbm::json_number(units.dt_s)},
+            {"rho0_kg_m3", lbm::json_number(units.rho0_kg_m3)},
+            {"velocity_scale_m_s", lbm::json_number(units.velocity_scale_m_s())},
+            {"mass_scale_kg", lbm::json_number(units.mass_scale_kg())},
+            {"vtk_field_units", lbm::json_string("lattice units")},
+        });
 
     lbm::PopulationField<Lattice> current(extent);
     lbm::PopulationField<Lattice> scratch(extent);
@@ -245,12 +286,17 @@ int main(int argc, char** argv) {
     if (!history) {
       throw std::runtime_error("Could not open convergence history CSV");
     }
-    history << "step,max_speed,average_speed,center_ux,center_uy,kinetic_energy,fluid_mass,relative_max_change\n";
+    history << "step,time_s,max_speed_lattice,max_speed_m_s,average_speed_lattice,"
+               "average_speed_m_s,center_ux_lattice,center_ux_m_s,center_uy_lattice,"
+               "center_uy_m_s,kinetic_energy_lattice,fluid_mass_lattice,fluid_mass_kg,"
+               "relative_max_change\n";
 
     std::cout << "Lid-driven cavity benchmark\n";
     std::cout << "Domain: " << extent.nx << " x " << extent.ny << " x " << extent.nz << '\n';
     std::cout << "tau=" << config.tau << " omega=" << omega << " viscosity=" << viscosity
               << " lid_velocity=" << config.lid_velocity << " Re=" << reynolds << '\n';
+    std::cout << "SI scaling: dx=" << units.dx_m << " m, dt=" << units.dt_s
+              << " s, velocity scale=" << units.velocity_scale_m_s() << " m/s\n";
     std::cout << "Output directory: " << output_directory.string() << "\n\n";
     std::cout << std::setw(8) << "step" << std::setw(16) << "max_speed" << std::setw(16)
               << "avg_speed" << std::setw(16) << "center_ux" << std::setw(16)
@@ -265,9 +311,14 @@ int main(int argc, char** argv) {
               : 0.0;
       previous_max_speed = stats.max_speed;
 
-      history << step << ',' << stats.max_speed << ',' << stats.average_speed << ','
-              << stats.center_ux << ',' << stats.center_uy << ',' << stats.kinetic_energy
-              << ',' << stats.fluid_mass << ',' << relative_change << '\n';
+      history << step << ',' << static_cast<double>(step) * units.dt_s << ','
+              << stats.max_speed << ',' << stats.max_speed * units.velocity_scale_m_s()
+              << ',' << stats.average_speed << ','
+              << stats.average_speed * units.velocity_scale_m_s() << ','
+              << stats.center_ux << ',' << stats.center_ux * units.velocity_scale_m_s()
+              << ',' << stats.center_uy << ',' << stats.center_uy * units.velocity_scale_m_s()
+              << ',' << stats.kinetic_energy << ',' << stats.fluid_mass << ','
+              << stats.fluid_mass * units.mass_scale_kg() << ',' << relative_change << '\n';
 
       std::cout << std::setw(8) << step << std::setw(16) << std::scientific
                 << stats.max_speed << std::setw(16) << stats.average_speed

@@ -155,8 +155,22 @@ template <typename Lattice>
   return sum;
 }
 
+template <typename Lattice>
+[[nodiscard]] constexpr const char* lattice_name() noexcept {
+  return "unknown_lattice";
+}
+
+template <>
+[[nodiscard]] constexpr const char* lattice_name<D3Q19>() noexcept {
+  return "d3q19";
+}
+
+template <>
+[[nodiscard]] constexpr const char* lattice_name<D3Q27>() noexcept {
+  return "d3q27";
+}
+
 static_assert(lattice_has_valid_opposites<D3Q19>());
 static_assert(lattice_has_valid_opposites<D3Q27>());
 
 }  // namespace lbm
-

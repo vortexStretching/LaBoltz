@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,24 @@ from tkinter import ttk
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = ROOT / "outputs"
+SUMMARY_METADATA_KEYS = [
+    "case",
+    "solver_dimension",
+    "physical_dimension",
+    "lattice",
+    "nx",
+    "ny",
+    "nz",
+    "steps",
+    "tau",
+    "omega",
+    "dx_m",
+    "dt_s",
+    "rho0_kg_m3",
+    "velocity_scale_m_s",
+    "kinematic_viscosity_si_m2_s",
+    "vtk_field_units",
+]
 
 
 @dataclass
@@ -45,8 +64,10 @@ class VtkData:
 class CaseData:
     output_dir: Path
     case_name: str = "case"
+    metadata: dict[str, object] = field(default_factory=dict)
     history: list[dict[str, float]] = field(default_factory=list)
     profile: list[dict[str, float]] = field(default_factory=list)
+    vtk_files: list[Path] = field(default_factory=list)
     vtk: VtkData | None = None
 
 
@@ -60,6 +81,15 @@ def read_float_csv(path: Path) -> list[dict[str, float]]:
         for row in reader:
             rows.append({key: float(value) for key, value in row.items() if key is not None})
         return rows
+
+
+def read_metadata(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+
+    with path.open(encoding="utf-8") as handle:
+        data = json.load(handle)
+    return data if isinstance(data, dict) else {}
 
 
 def parse_legacy_vtk(path: Path) -> VtkData:
@@ -193,17 +223,20 @@ def load_case(output_dir: Path, case_name: str | None = None) -> CaseData:
     if case_name is None:
         case_name = latest_case(output_dir, cases) or (cases[0] if cases else "case")
 
+    vtk_files = sorted(output_dir.glob(f"{case_name}_step_*.vtk"))
     final_vtk = output_dir / f"{case_name}_final.vtk"
-    if not final_vtk.exists():
-        vtk_files = sorted(output_dir.glob(f"{case_name}_*.vtk"))
-        final_vtk = vtk_files[-1] if vtk_files else final_vtk
+    if final_vtk.exists():
+        vtk_files.append(final_vtk)
+    selected_vtk = final_vtk if final_vtk.exists() else (vtk_files[-1] if vtk_files else final_vtk)
 
     return CaseData(
         output_dir=output_dir,
         case_name=case_name,
+        metadata=read_metadata(output_dir / "metadata.json"),
         history=read_float_csv(output_dir / f"{case_name}_history.csv"),
         profile=read_float_csv(output_dir / f"{case_name}_profile.csv"),
-        vtk=parse_legacy_vtk(final_vtk) if final_vtk.exists() else None,
+        vtk_files=vtk_files,
+        vtk=parse_legacy_vtk(selected_vtk) if selected_vtk.exists() else None,
     )
 
 
@@ -218,6 +251,23 @@ def finite_range(values: list[float]) -> tuple[float, float]:
         return minimum - padding, maximum + padding
     padding = 0.05 * (maximum - minimum)
     return minimum - padding, maximum + padding
+
+
+def format_value(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def selected_metadata(metadata: dict[str, object]) -> list[tuple[str, object]]:
+    items = [(key, metadata[key]) for key in SUMMARY_METADATA_KEYS if key in metadata]
+    seen = {key for key, _value in items}
+    items.extend((key, value) for key, value in metadata.items() if key not in seen)
+    return items
 
 
 def row_columns(rows: list[dict[str, float]]) -> list[str]:
@@ -330,6 +380,7 @@ class PlotCanvas(Canvas):
         title: str,
         x_label: str,
         y_label: str,
+        value_range: tuple[float, float] | None = None,
     ) -> None:
         self.delete("all")
         width = max(self.winfo_width(), 640)
@@ -341,7 +392,7 @@ class PlotCanvas(Canvas):
         rows = len(matrix)
         cols = len(matrix[0])
         values = [value for row in matrix for value in row]
-        minimum, maximum = finite_range(values)
+        minimum, maximum = value_range if value_range is not None else finite_range(values)
         left_margin = 72
         right_margin = 96
         top_margin = 48
@@ -410,6 +461,13 @@ def vtk_field_values(vtk: VtkData, field_name: str) -> list[float]:
     return []
 
 
+def vtk_field_range(vtk_files: list[Path], field_name: str) -> tuple[float, float]:
+    values: list[float] = []
+    for path in vtk_files:
+        values.extend(vtk_field_values(parse_legacy_vtk(path), field_name))
+    return finite_range(values)
+
+
 def vtk_xy_slice(vtk: VtkData, field_name: str, z_index: int) -> list[list[float]]:
     nx, ny, nz = vtk.dimensions
     z_index = max(0, min(nz - 1, z_index))
@@ -437,7 +495,9 @@ class LaboltzViewer:
         self.case_var = StringVar(value="")
         self.metric_var = StringVar(value="relative_l2_error")
         self.field_var = StringVar(value="velocity_x")
+        self.vtk_var = StringVar(value="")
         self.slice_var = StringVar(value="0")
+        self.field_range_cache: dict[str, tuple[float, float]] = {}
 
         self._configure_style()
         self._build_layout()
@@ -514,6 +574,10 @@ class LaboltzViewer:
 
         field_controls = ttk.Frame(self.field_frame, style="Panel.TFrame")
         field_controls.pack(side=TOP, fill=X, pady=(0, 8))
+        ttk.Label(field_controls, text="VTK", style="Panel.TLabel").pack(side=LEFT, padx=(0, 6))
+        self.vtk_box = ttk.Combobox(field_controls, textvariable=self.vtk_var, state="readonly", width=30)
+        self.vtk_box.pack(side=LEFT, padx=(0, 14))
+        self.vtk_box.bind("<<ComboboxSelected>>", lambda _event: self.select_vtk_file())
         ttk.Label(field_controls, text="Field", style="Panel.TLabel").pack(side=LEFT, padx=(0, 6))
         self.field_box = ttk.Combobox(field_controls, textvariable=self.field_var, state="readonly", width=24)
         self.field_box.pack(side=LEFT, padx=(0, 14))
@@ -541,6 +605,7 @@ class LaboltzViewer:
         try:
             self.case = load_case(output_dir, case_name)
             self.output_dir = self.case.output_dir
+            self.field_range_cache.clear()
             self.available_cases = discover_cases(self.output_dir)
             self.case_var.set(self.case.case_name)
             self.case_box.configure(values=self.available_cases)
@@ -569,6 +634,11 @@ class LaboltzViewer:
         lines = [f"Output folder: {self.case.output_dir}"]
         lines.append(f"Case: {case_label(self.case.case_name)}")
 
+        if self.case.metadata:
+            lines.extend(["", "Simulation metadata"])
+            for key, value in selected_metadata(self.case.metadata):
+                lines.append(f"  {key}: {format_value(value)}")
+
         if history:
             final = history[-1]
             lines.extend(["", f"{case_label(self.case.case_name)} convergence"])
@@ -590,6 +660,7 @@ class LaboltzViewer:
             lines.extend(
                 [
                     "",
+                    f"VTK snapshots: {len(self.case.vtk_files)}",
                     f"VTK file: {vtk.path.name}",
                     f"dimensions: {vtk.dimensions[0]} x {vtk.dimensions[1]} x {vtk.dimensions[2]}",
                     f"scalar fields: {', '.join(vtk.scalars) if vtk.scalars else 'none'}",
@@ -661,6 +732,13 @@ class LaboltzViewer:
         )
 
     def refresh_field_controls(self) -> None:
+        vtk_names = [path.name for path in self.case.vtk_files]
+        self.vtk_box.configure(values=vtk_names)
+        if self.case.vtk is not None:
+            self.vtk_var.set(self.case.vtk.path.name)
+        elif vtk_names:
+            self.vtk_var.set(vtk_names[-1])
+
         names = vtk_field_names(self.case.vtk)
         self.field_box.configure(values=names)
         if names and self.field_var.get() not in names:
@@ -671,6 +749,19 @@ class LaboltzViewer:
             if int_or_zero(self.slice_var.get()) > max_slice:
                 self.slice_var.set(str(max_slice))
 
+    def select_vtk_file(self) -> None:
+        selected = self.vtk_var.get()
+        for path in self.case.vtk_files:
+            if path.name == selected:
+                try:
+                    self.case.vtk = parse_legacy_vtk(path)
+                    self.refresh_field_controls()
+                    self.refresh_summary()
+                    self.refresh_field_plot()
+                except Exception as error:
+                    messagebox.showerror("Could not load VTK file", str(error))
+                return
+
     def refresh_field_plot(self) -> None:
         vtk = self.case.vtk
         if vtk is None:
@@ -680,7 +771,13 @@ class LaboltzViewer:
         field_name = self.field_var.get()
         z_index = int_or_zero(self.slice_var.get())
         matrix = vtk_xy_slice(vtk, field_name, z_index)
-        self.field_canvas.plot_heatmap(matrix, f"{field_name} at z={z_index}", "x", "y")
+        value_range = self.global_field_range(field_name)
+        self.field_canvas.plot_heatmap(matrix, f"{field_name} at z={z_index}", "x", "y", value_range)
+
+    def global_field_range(self, field_name: str) -> tuple[float, float]:
+        if field_name not in self.field_range_cache:
+            self.field_range_cache[field_name] = vtk_field_range(self.case.vtk_files, field_name)
+        return self.field_range_cache[field_name]
 
     def refresh_history_table(self) -> None:
         for column in self.history_table["columns"]:
@@ -794,9 +891,18 @@ def render_html_report(case: CaseData) -> str:
         "<body><main>",
         f"<h1>LaBoltz {html.escape(case_label(case.case_name))} Report</h1>",
         f"<p>Output folder: {html.escape(str(case.output_dir))}</p>",
-        "<section><h2>Final Metrics</h2><div class=\"metrics\">",
     ]
 
+    if case.metadata:
+        sections.append("<section><h2>Simulation Metadata</h2><div class=\"metrics\">")
+        for key, value in selected_metadata(case.metadata):
+            sections.append(
+                f"<div class=\"metric\"><div class=\"label\">{html.escape(key)}</div>"
+                f"<div class=\"value\">{html.escape(format_value(value))}</div></div>"
+            )
+        sections.append("</div></section>")
+
+    sections.append("<section><h2>Final Metrics</h2><div class=\"metrics\">")
     metric_keys = list(final.keys()) if final else ["step"]
     for key in metric_keys:
         value = final.get(key)
@@ -811,7 +917,21 @@ def render_html_report(case: CaseData) -> str:
         sections.append("<section>")
         sections.append(render_svg_line_plot(x_values, [(primary_metric, [row[primary_metric] for row in history], "#2a7fbb")], case_label(primary_metric), "step", primary_metric))
         sections.append("</section>")
-        comparison_metrics = [name for name in ["max_ux", "average_ux", "max_speed", "average_speed"] if name in metrics]
+        comparison_candidates = [
+            "max_ux_lattice",
+            "average_ux_lattice",
+            "max_speed_lattice",
+            "average_speed_lattice",
+            "max_ux_m_s",
+            "average_ux_m_s",
+            "max_speed_m_s",
+            "average_speed_m_s",
+            "max_ux",
+            "average_ux",
+            "max_speed",
+            "average_speed",
+        ]
+        comparison_metrics = [name for name in comparison_candidates if name in metrics]
         if len(comparison_metrics) >= 2:
             colors = ["#2a7fbb", "#c94f3d", "#2a9d8f", "#8b5fbf"]
             sections.append("<section>")
@@ -845,6 +965,7 @@ def render_html_report(case: CaseData) -> str:
     if case.vtk is not None:
         sections.append("<section>")
         sections.append(f"<h2>Field Data</h2><p>VTK file: {html.escape(case.vtk.path.name)}</p>")
+        sections.append(f"<p>VTK snapshots: {len(case.vtk_files)}</p>")
         sections.append(f"<p>Dimensions: {case.vtk.dimensions[0]} x {case.vtk.dimensions[1]} x {case.vtk.dimensions[2]}</p>")
         sections.append("</section>")
 
@@ -858,6 +979,10 @@ def run_check(output_dir: Path, case_name: str | None = None) -> int:
     print(f"Case: {case.case_name}")
     print(f"History rows: {len(case.history)}")
     print(f"Profile rows: {len(case.profile)}")
+    if case.metadata:
+        print("Metadata:")
+        for key, value in selected_metadata(case.metadata):
+            print(f"  {key}: {format_value(value)}")
     if case.history:
         final = case.history[-1]
         for key, value in final.items():
@@ -867,6 +992,7 @@ def run_check(output_dir: Path, case_name: str | None = None) -> int:
                 print(f"Final {key}: {value:.6e}")
     if case.vtk is not None:
         print(f"VTK: {case.vtk.path.name}")
+        print(f"VTK snapshots: {len(case.vtk_files)}")
         print(f"Dimensions: {case.vtk.dimensions}")
         print(f"Fields: {', '.join(vtk_field_names(case.vtk))}")
     report = render_html_report(case)
